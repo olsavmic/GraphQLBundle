@@ -19,6 +19,7 @@ use Symfony\Component\Config\Definition\Builder\EnumNodeDefinition;
 use Symfony\Component\Config\Definition\Builder\ScalarNodeDefinition;
 use Symfony\Component\Config\Definition\Builder\TreeBuilder;
 use Symfony\Component\Config\Definition\ConfigurationInterface;
+use Symfony\Component\HttpKernel\Kernel;
 use function array_keys;
 use function is_array;
 use function is_int;
@@ -31,15 +32,13 @@ class Configuration implements ConfigurationInterface
     public const NAME = 'overblog_graphql';
 
     private bool $debug;
-    private ?string $cacheDir;
 
     /**
      * @param bool $debug Whether to use the debug mode
      */
-    public function __construct(bool $debug, string $cacheDir = null)
+    public function __construct(bool $debug)
     {
-        $this->debug = (bool) $debug;
-        $this->cacheDir = $cacheDir;
+        $this->debug = $debug;
     }
 
     public function getConfigTreeBuilder(): TreeBuilder
@@ -93,7 +92,7 @@ class Configuration implements ConfigurationInterface
             ->addDefaultsIfNotSet()
             ->children()
                 ->booleanNode('enabled')->defaultTrue()->end()
-                ->scalarNode('internal_error_message')->defaultValue(ErrorHandler::DEFAULT_ERROR_MESSAGE)->end()
+                ->scalarNode('internal_error_message')->defaultValue(ErrorHandler::DEFAULT_ERROR_MESSAGE)->cannotBeEmpty()->end()
                 ->booleanNode('rethrow_internal_exceptions')->defaultFalse()->end()
                 ->booleanNode('debug')->defaultValue($this->debug)->end()
                 ->booleanNode('log')->defaultTrue()->end()
@@ -207,6 +206,16 @@ class Configuration implements ConfigurationInterface
         /** @var ArrayNodeDefinition $node */
         $node = $builder->getRootNode();
 
+        if (Kernel::VERSION_ID >= 50100) {
+            $deprecatedArgs = [
+                'overblog/graphql-bundle',
+                '0.13',
+                'The "%path%.%node%" configuration is deprecated and will be removed in 1.0. Add the "overblog_graphql.resolver_map" tag to the services instead.',
+            ];
+        } else {
+            $deprecatedArgs = ['The "%path%.%node%" configuration is deprecated since version 0.13 and will be removed in 1.0. Add the "overblog_graphql.resolver_map" tag to the services instead.'];
+        }
+
         // @phpstan-ignore-next-line
         $node
             ->beforeNormalization()
@@ -223,7 +232,7 @@ class Configuration implements ConfigurationInterface
                     ->arrayNode('resolver_maps')
                         ->defaultValue([])
                         ->prototype('scalar')->end()
-                        ->setDeprecated('The "%path%.%node%" configuration is deprecated since version 0.13 and will be removed in 1.0. Add the "overblog_graphql.resolver_map" tag to the services instead.')
+                        ->setDeprecated(...$deprecatedArgs)
                     ->end()
                     ->arrayNode('types')
                         ->defaultValue([])
@@ -247,22 +256,21 @@ class Configuration implements ConfigurationInterface
         $node
             ->children()
                 ->arrayNode('auto_discover')
-                    ->treatFalseLike(['bundles' => false, 'root_dir' => false])
-                    ->treatTrueLike(['bundles' => true, 'root_dir' => true])
-                    ->treatNullLike(['bundles' => true, 'root_dir' => true])
+                    ->treatFalseLike(['bundles' => false, 'root_dir' => false, 'built_in' => true])
+                    ->treatTrueLike(['bundles' => true, 'root_dir' => true, 'built_in' => true])
+                    ->treatNullLike(['bundles' => true, 'root_dir' => true, 'built_in' => true])
                     ->addDefaultsIfNotSet()
                     ->children()
                         ->booleanNode('bundles')->defaultFalse()->end()
                         ->booleanNode('root_dir')->defaultFalse()->end()
+                        ->booleanNode('built_in')->defaultTrue()->end()
                     ->end()
                 ->end()
                 ->arrayNode('types')
                     ->prototype('array')
                         ->addDefaultsIfNotSet()
                         ->beforeNormalization()
-                            ->ifTrue(function ($v) {
-                                return isset($v['type']) && is_string($v['type']);
-                            })
+                            ->ifTrue(fn ($v) => isset($v['type']) && is_string($v['type']))
                             ->then(function ($v) {
                                 if ('yml' === $v['type']) {
                                     $v['types'] = ['yaml'];
